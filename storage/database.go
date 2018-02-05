@@ -387,6 +387,11 @@ func (d *db) Open() error {
 		return err
 	}
 
+	// Start the wired list
+	if wiredList := d.opts.DatabaseBlockOptions().WiredList(); wiredList != nil {
+		wiredList.Start()
+	}
+
 	return d.mediator.Open()
 }
 
@@ -408,6 +413,11 @@ func (d *db) terminateWithLock() error {
 	// stop listening for namespace changes
 	if err := d.nsWatch.Close(); err != nil {
 		return err
+	}
+
+	// Stop the wired list
+	if wiredList := d.opts.DatabaseBlockOptions().WiredList(); wiredList != nil {
+		wiredList.Stop()
 	}
 
 	// NB(prateek): Terminate is meant to return quickly, so we rely upon
