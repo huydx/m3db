@@ -67,9 +67,10 @@ func testDatabaseShard(t *testing.T, opts Options) *dbShard {
 		&testIncreasingIndex{}, commitLogWriteNoOp, databaseIndexNoOp, true, opts, seriesOpts).(*dbShard)
 }
 
-func addMockSeries(ctrl *gomock.Controller, shard *dbShard, id ident.ID, index uint64) *series.MockDatabaseSeries {
+func addMockSeries(ctrl *gomock.Controller, shard *dbShard, id ident.ID, tags ident.Tags, index uint64) *series.MockDatabaseSeries {
 	series := series.NewMockDatabaseSeries(ctrl)
 	series.EXPECT().ID().Return(id).AnyTimes()
+	series.EXPECT().Tags().Return(tags).AnyTimes()
 	series.EXPECT().IsEmpty().Return(false).AnyTimes()
 	shard.lookup[id.Hash()] = shard.list.PushBack(&dbShardEntry{series: series, index: index})
 	return series
@@ -336,7 +337,7 @@ func addMockTestSeries(ctrl *gomock.Controller, shard *dbShard, id ident.ID) *se
 }
 
 func addTestSeries(shard *dbShard, id ident.ID) series.DatabaseSeries {
-	series := series.NewDatabaseSeries(id, shard.seriesOpts)
+	series := series.NewDatabaseSeries(id, nil, shard.seriesOpts)
 	series.Bootstrap(nil)
 	shard.Lock()
 	shard.lookup[id.Hash()] = shard.list.PushBack(&dbShardEntry{series: series})
@@ -669,7 +670,7 @@ func TestPurgeExpiredSeriesWriteAfterTicking(t *testing.T) {
 	shard := testDatabaseShard(t, opts)
 	defer shard.Close()
 	id := ident.StringID("foo")
-	s := addMockSeries(ctrl, shard, id, 0)
+	s := addMockSeries(ctrl, shard, id, nil, 0)
 	s.EXPECT().Tick().Do(func() {
 		// Emulate a write taking place just after tick for this series
 		s.EXPECT().Write(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
@@ -699,11 +700,11 @@ func TestPurgeExpiredSeriesWriteAfterPurging(t *testing.T) {
 	shard := testDatabaseShard(t, opts)
 	defer shard.Close()
 	id := ident.StringID("foo")
-	s := addMockSeries(ctrl, shard, id, 0)
+	s := addMockSeries(ctrl, shard, id, nil, 0)
 	s.EXPECT().Tick().Do(func() {
 		// Emulate a write taking place and staying open just after tick for this series
 		var err error
-		entry, err = shard.writableSeries(id)
+		entry, err = shard.writableSeries(id, ident.EmptyTagIterator)
 		require.NoError(t, err)
 	}).Return(series.TickResult{}, series.ErrSeriesAllDatapointsExpired)
 
@@ -775,7 +776,7 @@ func TestShardFetchBlocksIDExists(t *testing.T) {
 	shard := testDatabaseShard(t, opts)
 	defer shard.Close()
 	id := ident.StringID("foo")
-	series := addMockSeries(ctrl, shard, id, 0)
+	series := addMockSeries(ctrl, shard, id, nil, 0)
 	now := time.Now()
 	starts := []time.Time{now}
 	expected := []block.FetchBlockResult{block.NewFetchBlockResult(now, nil, nil)}

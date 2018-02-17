@@ -216,6 +216,7 @@ func (fn OnRetrieveBlockFn) OnRetrieveBlock(
 // RetrievableBlockMetadata describes a retrievable block.
 type RetrievableBlockMetadata struct {
 	ID       ident.ID
+	Tags     ident.Tags
 	Length   int
 	Checksum uint32
 }

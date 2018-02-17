@@ -24,6 +24,8 @@ import (
 	"errors"
 
 	"github.com/m3db/m3db/storage/index"
+	"github.com/m3db/m3ninx/doc"
+	"github.com/m3db/m3ninx/index/segment/mem"
 	"github.com/m3db/m3x/context"
 	"github.com/m3db/m3x/ident"
 )
@@ -33,12 +35,29 @@ var (
 )
 
 type dbIndex struct {
-	opts Options
+	segment mem.Segment
+
+	idPool ident.Pool
+
+	opts  Options
+	mopts mem.Options // TODO(prateek): migrate mem.Options -> Options
 }
 
 func newDatabaseIndex(o Options) (databaseIndex, error) {
+	mopts := mem.NewOptions().
+		SetInstrumentOptions(o.InstrumentOptions())
+
+	seg, err := mem.New(1, mopts)
+	if err != nil {
+		return nil, err
+	}
+
 	return &dbIndex{
-		opts: o,
+		segment: seg,
+
+		idPool: o.IdentifierPool(),
+		opts:   o,
+		mopts:  mopts,
 	}, nil
 }
 
@@ -48,7 +67,8 @@ func (i *dbIndex) Write(
 	id ident.ID,
 	tags ident.TagIterator,
 ) error {
-	return errIndexingNotImplemented
+	d := i.doc(namespace, id, tags)
+	return i.segment.Insert(d)
 }
 
 func (i *dbIndex) Query(
@@ -56,7 +76,45 @@ func (i *dbIndex) Query(
 	query index.Query,
 	opts index.QueryOptions,
 ) (index.QueryResults, error) {
-	return index.QueryResults{}, errIndexingNotImplemented
+	// TODO(prateek): use QueryOptions to restrict results
+	iter, err := i.segment.Query(query.Query)
+	if err != nil {
+		return index.QueryResults{}, err
+	}
+
+	return index.QueryResults{
+		Iterator:   index.NewIterator(iter, i.idPool),
+		Exhaustive: true,
+	}, nil
+}
+
+func (i *dbIndex) doc(ns, id ident.ID, tags ident.TagIterator) doc.Document {
+	// TODO(prateek): need to figure out copy/release semantics for ident.ID cloning.
+	// Could probably keep a clone registered to a context per mem.Segment. With it,
+	// we could release the ids once the segment is cleared, without requiring any
+	// clone semantics within m3ninx itself.
+	nsCopy := i.idPool.Clone(ns)
+	idCopy := i.idPool.Clone(id)
+	fields := make([]doc.Field, 0, 1+tags.Remaining())
+	fields = append(fields, doc.Field{
+		Name:      index.ReservedFieldNameNamespace,
+		Value:     nsCopy.Data().Get(),
+		ValueType: doc.StringValueType,
+	})
+	tags = tags.Clone()
+	defer tags.Close()
+	for tags.Next() {
+		t := tags.Current()
+		fields = append(fields, doc.Field{
+			Name:      t.Name.Data().Get(),
+			Value:     t.Value.Data().Get(),
+			ValueType: doc.StringValueType,
+		})
+	}
+	return doc.Document{
+		ID:     idCopy.Data().Get(),
+		Fields: fields,
+	}
 }
 
 type databaseIndexWriter interface {
@@ -66,6 +124,22 @@ type databaseIndexWriter interface {
 		id ident.ID,
 		tags ident.TagIterator,
 	) error
+}
+
+type databaseIndexWriteFn func(
+	ctx context.Context,
+	namespace ident.ID,
+	id ident.ID,
+	tags ident.TagIterator,
+) error
+
+func (fn databaseIndexWriteFn) Write(
+	ctx context.Context,
+	namespace ident.ID,
+	id ident.ID,
+	tags ident.TagIterator,
+) error {
+	return fn(ctx, namespace, id, tags)
 }
 
 type dbIndexNoOp struct{}
@@ -79,3 +153,5 @@ func (n dbIndexNoOp) Query(context.Context, index.Query, index.QueryOptions) (in
 }
 
 var databaseIndexNoOp databaseIndex = dbIndexNoOp{}
+
+var databaseIndexNoOpWriteFn databaseIndexWriteFn = databaseIndexNoOp.Write
