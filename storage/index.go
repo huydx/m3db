@@ -56,10 +56,9 @@ func newDatabaseIndex(o Options) (databaseIndex, error) {
 }
 
 func (i *dbIndex) Write(
-	ctx context.Context,
 	namespace ident.ID,
 	id ident.ID,
-	tags ident.TagIterator,
+	tags ident.Tags,
 ) error {
 	d := i.doc(namespace, id, tags)
 	return i.segment.Insert(d)
@@ -82,26 +81,24 @@ func (i *dbIndex) Query(
 	}, nil
 }
 
-func (i *dbIndex) doc(ns, id ident.ID, tags ident.TagIterator) doc.Document {
+func (i *dbIndex) doc(ns, id ident.ID, tags ident.Tags) doc.Document {
 	// TODO(prateek): need to figure out copy/release semantics for ident.ID cloning.
 	// Could probably keep a clone registered to a context per mem.Segment. With it,
 	// we could release the ids once the segment is cleared, without requiring any
 	// clone semantics within m3ninx itself.
 	nsCopy := i.idPool.Clone(ns)
 	idCopy := i.idPool.Clone(id)
-	fields := make([]doc.Field, 0, 1+tags.Remaining())
+	fields := make([]doc.Field, 0, 1+len(tags))
 	fields = append(fields, doc.Field{
 		Name:      index.ReservedFieldNameNamespace,
 		Value:     nsCopy.Data().Get(),
 		ValueType: doc.StringValueType,
 	})
-	tags = tags.Clone()
-	defer tags.Close()
-	for tags.Next() {
-		t := tags.Current()
+	for j := 0; j < len(tags); j++ {
+		t := tags[j]
 		fields = append(fields, doc.Field{
-			Name:      t.Name.Data().Get(),
-			Value:     t.Value.Data().Get(),
+			Name:      i.idPool.Clone(t.Name).Data().Get(),
+			Value:     i.idPool.Clone(t.Value).Data().Get(),
 			ValueType: doc.StringValueType,
 		})
 	}
@@ -113,32 +110,29 @@ func (i *dbIndex) doc(ns, id ident.ID, tags ident.TagIterator) doc.Document {
 
 type databaseIndexWriter interface {
 	Write(
-		ctx context.Context,
 		namespace ident.ID,
 		id ident.ID,
-		tags ident.TagIterator,
+		tags ident.Tags,
 	) error
 }
 
 type databaseIndexWriteFn func(
-	ctx context.Context,
 	namespace ident.ID,
 	id ident.ID,
-	tags ident.TagIterator,
+	tags ident.Tags,
 ) error
 
 func (fn databaseIndexWriteFn) Write(
-	ctx context.Context,
 	namespace ident.ID,
 	id ident.ID,
-	tags ident.TagIterator,
+	tags ident.Tags,
 ) error {
-	return fn(ctx, namespace, id, tags)
+	return fn(namespace, id, tags)
 }
 
 type dbIndexNoOp struct{}
 
-func (n dbIndexNoOp) Write(context.Context, ident.ID, ident.ID, ident.TagIterator) error {
+func (n dbIndexNoOp) Write(ident.ID, ident.ID, ident.Tags) error {
 	return nil
 }
 

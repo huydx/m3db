@@ -46,9 +46,9 @@ func TestDatabaseIndexDocConversion(t *testing.T) {
 
 	id := ident.StringID("foo")
 	ns := ident.StringID("bar")
-	tags := ident.NewTagIterator(
+	tags := ident.Tags{
 		ident.StringTag("name", "value"),
-	)
+	}
 
 	d := idx.doc(ns, id, tags)
 	require.Equal(t, "foo", string(d.ID))
@@ -66,12 +66,12 @@ func TestDatabaseIndexInsertQuery(t *testing.T) {
 	var (
 		id   = ident.StringID("foo")
 		ns   = ident.StringID("bar")
-		tags = ident.NewTagIterator(
+		tags = ident.Tags{
 			ident.StringTag("name", "value"),
-		)
+		}
 		ctx = context.NewContext()
 	)
-	require.NoError(t, idx.Write(ctx, ns, id, tags))
+	require.NoError(t, idx.Write(ns, id, tags))
 	res, err := idx.Query(ctx, index.Query{
 		segment.Query{
 			Conjunction: segment.AndConjunction,

@@ -103,7 +103,7 @@ type dbShard struct {
 	increasingIndex          increasingIndex
 	seriesPool               series.DatabaseSeriesPool
 	commitLogWriter          commitLogWriter
-	indexWriter              databaseIndexWriter
+	indexWriteFn             databaseIndexWriteFn
 	insertQueue              *dbShardInsertQueue
 	lookup                   map[ident.Hash]*list.Element
 	list                     *list.List
@@ -143,6 +143,7 @@ type dbShardMetrics struct {
 	insertAsyncInsertErrors    tally.Counter
 	insertAsyncBootstrapErrors tally.Counter
 	insertAsyncWriteErrors     tally.Counter
+	insertAsyncIndexErrors     tally.Counter
 }
 
 func newDatabaseShardMetrics(scope tally.Scope) dbShardMetrics {
@@ -159,6 +160,9 @@ func newDatabaseShardMetrics(scope tally.Scope) dbShardMetrics {
 		}).Counter("insert-async.errors"),
 		insertAsyncWriteErrors: scope.Tagged(map[string]string{
 			"error_type": "write-value",
+		}).Counter("insert-async.errors"),
+		insertAsyncIndexErrors: scope.Tagged(map[string]string{
+			"error_type": "index-series",
 		}).Counter("insert-async.errors"),
 	}
 }
@@ -201,7 +205,7 @@ func newDatabaseShard(
 	namespaceReaderMgr databaseNamespaceReaderManager,
 	increasingIndex increasingIndex,
 	commitLogWriter commitLogWriter,
-	indexWriter databaseIndexWriter,
+	indexWriteFn databaseIndexWriteFn,
 	needsBootstrap bool,
 	opts Options,
 	seriesOpts series.Options,
@@ -220,7 +224,7 @@ func newDatabaseShard(
 		increasingIndex:    increasingIndex,
 		seriesPool:         opts.DatabaseSeriesPool(),
 		commitLogWriter:    commitLogWriter,
-		indexWriter:        indexWriter,
+		indexWriteFn:       indexWriteFn,
 		lookup:             make(map[ident.Hash]*list.Element),
 		list:               list.New(),
 		filesetBeforeFn:    fs.FilesetBefore,
@@ -625,7 +629,7 @@ func (s *dbShard) WriteTagged(
 	unit xtime.Unit,
 	annotation []byte,
 ) error {
-	return s.writeAndIndex(ctx, id, tags, timestamp, value, unit, annotation, s.indexWriter.Write)
+	return s.writeAndIndex(ctx, id, tags, timestamp, value, unit, annotation, s.indexWriteFn)
 }
 
 func (s *dbShard) Write(
@@ -660,7 +664,9 @@ func (s *dbShard) writeAndIndex(
 	// If no entry and we are not writing new series asynchronously
 	if !writable && !opts.writeNewSeriesAsync {
 		// Avoid double lookup by enqueueing insert immediately
-		result, err := s.insertSeriesAsyncBatched(id, tags, dbShardInsertAsyncOptions{})
+		result, err := s.insertSeriesAsyncBatched(id, tags, dbShardInsertAsyncOptions{
+			indexWriteFn: indexWriteFn,
+		})
 		if err != nil {
 			return err
 		}
@@ -707,6 +713,7 @@ func (s *dbShard) writeAndIndex(
 				unit:       unit,
 				annotation: annotation,
 			},
+			indexWriteFn: indexWriteFn,
 		})
 		if err != nil {
 			return err
@@ -945,6 +952,7 @@ func (s *dbShard) insertSeriesSync(
 
 func (s *dbShard) insertSeriesBatch(inserts []dbShardInsert) error {
 	anyPendingAction := false
+	anyPendingIndexing := false
 
 	s.Lock()
 	for i := range inserts {
@@ -952,6 +960,7 @@ func (s *dbShard) insertSeriesBatch(inserts []dbShardInsert) error {
 		// writer count so it does not look empty immediately after
 		// we release the write lock
 		hasPendingWrite := inserts[i].opts.hasPendingWrite
+		anyPendingIndexing = anyPendingIndexing || inserts[i].opts.indexWriteFn != nil
 		hasPendingRetrievedBlock := inserts[i].opts.hasPendingRetrievedBlock
 		anyPendingAction = anyPendingAction || hasPendingWrite || hasPendingRetrievedBlock
 
@@ -987,6 +996,22 @@ func (s *dbShard) insertSeriesBatch(inserts []dbShardInsert) error {
 		s.lookup[entry.series.ID().Hash()] = s.list.PushBack(entry)
 	}
 	s.Unlock()
+
+	if anyPendingIndexing {
+		for i := range inserts {
+			insert := inserts[i]
+			indexFn := insert.opts.indexWriteFn
+			if indexFn == nil {
+				continue
+			}
+
+			ns, id, tags := s.namespace.ID(), insert.entry.series.ID(), insert.entry.series.Tags()
+			if err := indexFn(ns, id, tags); err != nil {
+				s.metrics.insertAsyncIndexErrors.Inc(int64(len(inserts) - i))
+				return err
+			}
+		}
+	}
 
 	if !anyPendingAction {
 		return nil
@@ -1391,7 +1416,7 @@ func (s *dbShard) Bootstrap(
 			// Synchronously insert to avoid waiting for
 			// the insert queue potential delayed insert
 			entry, err = s.insertSeriesSync(dbBlocks.ID,
-				ident.EmptyTagIterator, // TODO(prateek): retrieve tags during bootstrap process
+				ident.EmptyTagIterator, // TODO(prateek): retrieve tags during bootstrap process, and insert into index
 				insertSyncIncReaderWriterCount)
 			if err != nil {
 				multiErr = multiErr.Add(err)

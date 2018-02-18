@@ -60,11 +60,15 @@ func (i *testIncreasingIndex) nextIndex() uint64 {
 }
 
 func testDatabaseShard(t *testing.T, opts Options) *dbShard {
+	return testDatabaseShardWithIndexFn(t, opts, databaseIndexNoOp.Write)
+}
+
+func testDatabaseShardWithIndexFn(t *testing.T, opts Options, fn databaseIndexWriteFn) *dbShard {
 	ns := newTestNamespace(t)
 	nsReaderMgr := newNamespaceReaderManager(ns.metadata, tally.NoopScope, opts)
 	seriesOpts := NewSeriesOptionsFromOptions(opts, ns.Options().RetentionOptions())
 	return newDatabaseShard(ns.metadata, 0, nil, nsReaderMgr,
-		&testIncreasingIndex{}, commitLogWriteNoOp, databaseIndexNoOp, true, opts, seriesOpts).(*dbShard)
+		&testIncreasingIndex{}, commitLogWriteNoOp, fn, true, opts, seriesOpts).(*dbShard)
 }
 
 func addMockSeries(ctrl *gomock.Controller, shard *dbShard, id ident.ID, tags ident.Tags, index uint64) *series.MockDatabaseSeries {
@@ -81,7 +85,8 @@ func TestShardDontNeedBootstrap(t *testing.T) {
 	testNs := newTestNamespace(t)
 	seriesOpts := NewSeriesOptionsFromOptions(opts, testNs.Options().RetentionOptions())
 	shard := newDatabaseShard(testNs.metadata, 0, nil, nil,
-		&testIncreasingIndex{}, commitLogWriteNoOp, databaseIndexNoOp, false, opts, seriesOpts).(*dbShard)
+		&testIncreasingIndex{}, commitLogWriteNoOp, databaseIndexNoOp.Write,
+		false, opts, seriesOpts).(*dbShard)
 	defer shard.Close()
 
 	require.Equal(t, bootstrapped, shard.bs)
@@ -407,6 +412,7 @@ func TestShardTick(t *testing.T) {
 	_, ok := shard.flushState.statesByTime[xtime.ToUnixNano(earliestFlush)]
 	require.True(t, ok)
 }
+
 func TestShardWriteAsync(t *testing.T) {
 	testReporter := xmetrics.NewTestStatsReporter(xmetrics.NewTestStatsReporterOptions())
 	scope, closer := tally.NewRootScope(tally.ScopeOptions{
@@ -928,4 +934,127 @@ func TestShardReadEncodedCachesSeriesWithRecentlyReadPolicy(t *testing.T) {
 
 	assert.False(t, entry.series.IsEmpty())
 	assert.Equal(t, 2, entry.series.NumActiveBlocks())
+}
+
+func TestShardInsertDatabaseIndex(t *testing.T) {
+	opts := testDatabaseOptions().
+		SetIndexingEnabled(true)
+
+	lock := sync.Mutex{}
+	indexWrites := []testIndexWrite{}
+
+	mockWriteFn := func(ns ident.ID, id ident.ID, tags ident.Tags) error {
+		lock.Lock()
+		indexWrites = append(indexWrites, testIndexWrite{id: id, ns: ns, tags: tags})
+		lock.Unlock()
+		return nil
+	}
+
+	shard := testDatabaseShardWithIndexFn(t, opts, mockWriteFn)
+	shard.SetRuntimeOptions(runtime.NewOptions().SetWriteNewSeriesAsync(false))
+	defer shard.Close()
+
+	ctx := context.NewContext()
+	defer ctx.Close()
+
+	require.NoError(t,
+		shard.WriteTagged(ctx, ident.StringID("foo"),
+			ident.NewTagIterator(ident.StringTag("name", "value")),
+			time.Now(), 1.0, xtime.Second, nil))
+
+	require.NoError(t,
+		shard.Write(ctx, ident.StringID("baz"), time.Now(), 1.0, xtime.Second, nil))
+
+	lock.Lock()
+	defer lock.Unlock()
+
+	require.Len(t, indexWrites, 1)
+	require.Equal(t, "foo", indexWrites[0].id.String())
+	require.Equal(t, "testns1", indexWrites[0].ns.String())
+	require.Equal(t, "name", indexWrites[0].tags[0].Name.String())
+	require.Equal(t, "value", indexWrites[0].tags[0].Value.String())
+}
+
+func TestShardAsyncInsertDatabaseIndex(t *testing.T) {
+	testReporter := xmetrics.NewTestStatsReporter(xmetrics.NewTestStatsReporterOptions())
+	scope, closer := tally.NewRootScope(tally.ScopeOptions{
+		Reporter: testReporter,
+	}, 100*time.Millisecond)
+	defer closer.Close()
+
+	opts := testDatabaseOptions().SetIndexingEnabled(true)
+	opts = opts.
+		SetInstrumentOptions(
+			opts.InstrumentOptions().
+				SetMetricsScope(scope).
+				SetReportInterval(100 * time.Millisecond))
+
+	lock := sync.Mutex{}
+	indexWrites := []testIndexWrite{}
+
+	mockWriteFn := func(ns ident.ID, id ident.ID, tags ident.Tags) error {
+		lock.Lock()
+		indexWrites = append(indexWrites, testIndexWrite{id: id, ns: ns, tags: tags})
+		lock.Unlock()
+		return nil
+	}
+
+	shard := testDatabaseShardWithIndexFn(t, opts, mockWriteFn)
+	shard.SetRuntimeOptions(runtime.NewOptions().SetWriteNewSeriesAsync(true))
+	defer shard.Close()
+
+	ctx := context.NewContext()
+	defer ctx.Close()
+
+	require.NoError(t,
+		shard.WriteTagged(ctx, ident.StringID("foo"),
+			ident.NewTagIterator(ident.StringTag("name", "value")),
+			time.Now(), 1.0, xtime.Second, nil))
+
+	require.NoError(t,
+		shard.Write(ctx, ident.StringID("bar"), time.Now(), 1.0, xtime.Second, nil))
+
+	require.NoError(t,
+		shard.WriteTagged(ctx, ident.StringID("baz"),
+			ident.NewTagIterator(
+				ident.StringTag("all", "tags"),
+				ident.StringTag("should", "be-present"),
+			),
+			time.Now(), 1.0, xtime.Second, nil))
+
+	for {
+		counter, ok := testReporter.Counters()["dbshard.insert-queue.inserts"]
+		if ok && counter == 3 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	lock.Lock()
+	defer lock.Unlock()
+
+	require.Len(t, indexWrites, 2)
+	for _, w := range indexWrites {
+		if w.id.String() == "foo" {
+			require.Equal(t, "testns1", w.ns.String())
+			require.Len(t, w.tags, 1)
+			require.Equal(t, "name", w.tags[0].Name.String())
+			require.Equal(t, "value", w.tags[0].Value.String())
+		} else if w.id.String() == "baz" {
+			require.Equal(t, "testns1", w.ns.String())
+			require.Len(t, w.tags, 2)
+			require.Equal(t, "all", w.tags[0].Name.String())
+			require.Equal(t, "tags", w.tags[0].Value.String())
+			require.Equal(t, "should", w.tags[1].Name.String())
+			require.Equal(t, "be-present", w.tags[1].Value.String())
+		} else {
+			require.Fail(t, "unexpected write", w)
+		}
+	}
+}
+
+type testIndexWrite struct {
+	id   ident.ID
+	ns   ident.ID
+	tags ident.Tags
 }
