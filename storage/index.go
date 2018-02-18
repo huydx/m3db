@@ -21,17 +21,11 @@
 package storage
 
 import (
-	"errors"
-
 	"github.com/m3db/m3db/storage/index"
 	"github.com/m3db/m3ninx/doc"
 	"github.com/m3db/m3ninx/index/segment/mem"
 	"github.com/m3db/m3x/context"
 	"github.com/m3db/m3x/ident"
-)
-
-var (
-	errIndexingNotImplemented = errors.New("indexing is not implemented")
 )
 
 type dbIndex struct {
