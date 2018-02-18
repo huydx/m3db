@@ -56,7 +56,8 @@ type dbBlock struct {
 	retriever  DatabaseShardBlockRetriever
 	retrieveID ident.ID
 
-	checksum     uint32
+	checksum uint32
+
 	wasRetrieved bool
 	closed       bool
 }
