@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fortytw2/leaktest"
 	"github.com/m3db/m3db/persist"
 	"github.com/m3db/m3db/retention"
 	"github.com/m3db/m3db/runtime"
@@ -60,14 +61,19 @@ func (i *testIncreasingIndex) nextIndex() uint64 {
 }
 
 func testDatabaseShard(t *testing.T, opts Options) *dbShard {
-	return testDatabaseShardWithIndexFn(t, opts, databaseIndexNoOpWriteFn)
+	_, s := testDatabaseShardWithIndexFn(t, opts, databaseIndexNoOpWriteFn)
+	return s
 }
 
-func testDatabaseShardWithIndexFn(t *testing.T, opts Options, fn databaseIndexWriteFn) *dbShard {
+func testDatabaseShardWithIndexFn(
+	t *testing.T,
+	opts Options,
+	fn databaseIndexWriteFn,
+) (*dbNamespace, *dbShard) {
 	ns := newTestNamespace(t)
 	nsReaderMgr := newNamespaceReaderManager(ns.metadata, tally.NoopScope, opts)
 	seriesOpts := NewSeriesOptionsFromOptions(opts, ns.Options().RetentionOptions())
-	return newDatabaseShard(ns.metadata, 0, nil, nsReaderMgr,
+	return ns, newDatabaseShard(ns.metadata, 0, nil, nsReaderMgr,
 		&testIncreasingIndex{}, commitLogWriteNoOp, fn, true, opts, seriesOpts).(*dbShard)
 }
 
@@ -937,8 +943,8 @@ func TestShardReadEncodedCachesSeriesWithRecentlyReadPolicy(t *testing.T) {
 }
 
 func TestShardInsertDatabaseIndex(t *testing.T) {
-	opts := testDatabaseOptions().
-		SetIndexingEnabled(true)
+	defer leaktest.CheckTimeout(t, 2*time.Second)()
+	opts := testDatabaseOptions().SetIndexingEnabled(true)
 
 	lock := sync.Mutex{}
 	indexWrites := []testIndexWrite{}
@@ -950,9 +956,10 @@ func TestShardInsertDatabaseIndex(t *testing.T) {
 		return nil
 	}
 
-	shard := testDatabaseShardWithIndexFn(t, opts, mockWriteFn)
+	dbNs, shard := testDatabaseShardWithIndexFn(t, opts, mockWriteFn)
 	shard.SetRuntimeOptions(runtime.NewOptions().SetWriteNewSeriesAsync(false))
 	defer shard.Close()
+	defer dbNs.Close()
 
 	ctx := context.NewContext()
 	defer ctx.Close()
@@ -981,20 +988,10 @@ func TestShardInsertDatabaseIndex(t *testing.T) {
 }
 
 func TestShardAsyncInsertDatabaseIndex(t *testing.T) {
-	testReporter := xmetrics.NewTestStatsReporter(xmetrics.NewTestStatsReporterOptions())
-	scope, closer := tally.NewRootScope(tally.ScopeOptions{
-		Reporter: testReporter,
-	}, 100*time.Millisecond)
-	defer closer.Close()
+	defer leaktest.CheckTimeout(t, 2*time.Second)()
 
 	opts := testDatabaseOptions().SetIndexingEnabled(true)
-	opts = opts.
-		SetInstrumentOptions(
-			opts.InstrumentOptions().
-				SetMetricsScope(scope).
-				SetReportInterval(100 * time.Millisecond))
-
-	lock := sync.Mutex{}
+	lock := sync.RWMutex{}
 	indexWrites := []testIndexWrite{}
 
 	mockWriteFn := func(ns ident.ID, id ident.ID, tags ident.Tags) error {
@@ -1004,9 +1001,10 @@ func TestShardAsyncInsertDatabaseIndex(t *testing.T) {
 		return nil
 	}
 
-	shard := testDatabaseShardWithIndexFn(t, opts, mockWriteFn)
+	dbNs, shard := testDatabaseShardWithIndexFn(t, opts, mockWriteFn)
 	shard.SetRuntimeOptions(runtime.NewOptions().SetWriteNewSeriesAsync(true))
 	defer shard.Close()
+	defer dbNs.Close()
 
 	ctx := context.NewContext()
 	defer ctx.Close()
@@ -1033,11 +1031,13 @@ func TestShardAsyncInsertDatabaseIndex(t *testing.T) {
 			time.Now(), 1.0, xtime.Second, nil))
 
 	for {
-		counter, ok := testReporter.Counters()["dbshard.insert-queue.inserts"]
-		if ok && counter == 4 {
+		lock.RLock()
+		l := len(indexWrites)
+		lock.RUnlock()
+		if l == 2 {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	lock.Lock()
