@@ -30,6 +30,14 @@ import (
 	xtime "github.com/m3db/m3x/time"
 )
 
+type writeAttemptType int
+
+const (
+	unknownWriteAttemptType writeAttemptType = iota
+	untaggedWriteAttemptType
+	taggedWriteAttemptType
+)
+
 var writeAttemptArgsZeroed writeAttemptArgs
 
 type writeAttempt struct {
@@ -41,12 +49,14 @@ type writeAttempt struct {
 }
 
 type writeAttemptArgs struct {
-	namespace  ident.ID
-	id         ident.ID
-	t          time.Time
-	value      float64
-	unit       xtime.Unit
-	annotation []byte
+	attemptType writeAttemptType
+	namespace   ident.ID
+	id          ident.ID
+	tags        ident.TagIterator
+	t           time.Time
+	value       float64
+	unit        xtime.Unit
+	annotation  []byte
 }
 
 func (w *writeAttempt) reset() {
@@ -54,8 +64,9 @@ func (w *writeAttempt) reset() {
 }
 
 func (w *writeAttempt) perform() error {
-	err := w.session.writeAttempt(w.args.namespace, w.args.id,
-		w.args.t, w.args.value, w.args.unit, w.args.annotation)
+	err := w.session.writeAttempt(w.args.attemptType,
+		w.args.namespace, w.args.id, w.args.tags, w.args.t,
+		w.args.value, w.args.unit, w.args.annotation)
 
 	if IsBadRequestError(err) {
 		// Do not retry bad request errors
