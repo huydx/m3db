@@ -221,7 +221,7 @@ func (q *queue) drain() {
 					currWriteOpsByNamespace[namespaceKey] = nil
 					currBatchElementsByNamespace[namespaceKey] = nil
 				}
-			case *writeOpTagged:
+			case *writeTaggedOp:
 				namespace := v.namespace
 				namespaceKey := namespace.Hash()
 				currTaggedWriteOps = currTaggedWriteOpsByNamespace[namespaceKey]
@@ -266,7 +266,7 @@ func (q *queue) drain() {
 		// If any outstanding tagged write ops, async write
 		for _, writeOps := range currTaggedWriteOpsByNamespace {
 			if len(writeOps) > 0 {
-				namespace := writeOps[0].(*writeOp).namespace
+				namespace := writeOps[0].(*writeTaggedOp).namespace
 				namespaceKey := namespace.Hash()
 				q.asyncTaggedWrite(namespace, writeOps, currTaggedBatchElementsByNamespace[namespaceKey])
 				currTaggedWriteOpsByNamespace[namespaceKey] = nil

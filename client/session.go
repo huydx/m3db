@@ -146,7 +146,7 @@ type session struct {
 	contextPool                      context.Pool
 	idPool                           ident.Pool
 	writeOpPool                      *writeOpPool
-	writeOpTaggedPool                *writeOpTaggedPool
+	writeTaggedOpPool                *writeTaggedOpPool
 	fetchBatchOpPool                 *fetchBatchOpPool
 	fetchBatchOpArrayArrayPool       *fetchBatchOpArrayArrayPool
 	iteratorArrayPool                encoding.IteratorArrayPool
@@ -412,13 +412,13 @@ func (s *session) Open() error {
 		))
 	s.writeOpPool = newWriteOpPool(writeOpPoolOpts)
 	s.writeOpPool.Init()
-	writeOpTaggedPoolOpts := pool.NewObjectPoolOptions().
+	writeTaggedOpPoolOpts := pool.NewObjectPoolOptions().
 		SetSize(s.opts.WriteOpPoolSize()).
 		SetInstrumentOptions(s.opts.InstrumentOptions().SetMetricsScope(
 			s.scope.SubScope("write-op-tagged-pool"),
 		))
-	s.writeOpTaggedPool = newWriteOpTaggedPool(writeOpTaggedPoolOpts)
-	s.writeOpTaggedPool.Init()
+	s.writeTaggedOpPool = newWriteTaggedOpPool(writeTaggedOpPoolOpts)
+	s.writeTaggedOpPool.Init()
 	writeStatePoolOpts := pool.NewObjectPoolOptions().
 		SetSize(s.opts.WriteOpPoolSize()).
 		SetInstrumentOptions(s.opts.InstrumentOptions().SetMetricsScope(
@@ -850,7 +850,7 @@ func (s *session) writeAttempt(
 		wop.request.Datapoint.Annotation = annotation
 		op = wop
 	case taggedWriteAttemptType:
-		wop := s.writeOpTaggedPool.Get()
+		wop := s.writeTaggedOpPool.Get()
 		wop.namespace = nsID
 		wop.shardID = s.topoMap.ShardSet().Lookup(tsID)
 		wop.request.ID = tsID.Data().Get()
