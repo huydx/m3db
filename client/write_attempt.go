@@ -30,7 +30,7 @@ import (
 	xtime "github.com/m3db/m3x/time"
 )
 
-type writeAttemptType int
+type writeAttemptType byte
 
 // nolint
 const (
