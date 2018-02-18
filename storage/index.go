@@ -108,27 +108,11 @@ func (i *dbIndex) doc(ns, id ident.ID, tags ident.Tags) doc.Document {
 	}
 }
 
-type databaseIndexWriter interface {
-	Write(
-		namespace ident.ID,
-		id ident.ID,
-		tags ident.Tags,
-	) error
-}
-
 type databaseIndexWriteFn func(
 	namespace ident.ID,
 	id ident.ID,
 	tags ident.Tags,
 ) error
-
-func (fn databaseIndexWriteFn) Write(
-	namespace ident.ID,
-	id ident.ID,
-	tags ident.Tags,
-) error {
-	return fn(namespace, id, tags)
-}
 
 type dbIndexNoOp struct{}
 

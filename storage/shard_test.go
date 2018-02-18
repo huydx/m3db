@@ -60,7 +60,7 @@ func (i *testIncreasingIndex) nextIndex() uint64 {
 }
 
 func testDatabaseShard(t *testing.T, opts Options) *dbShard {
-	return testDatabaseShardWithIndexFn(t, opts, databaseIndexNoOp.Write)
+	return testDatabaseShardWithIndexFn(t, opts, databaseIndexNoOpWriteFn)
 }
 
 func testDatabaseShardWithIndexFn(t *testing.T, opts Options, fn databaseIndexWriteFn) *dbShard {
@@ -85,7 +85,7 @@ func TestShardDontNeedBootstrap(t *testing.T) {
 	testNs := newTestNamespace(t)
 	seriesOpts := NewSeriesOptionsFromOptions(opts, testNs.Options().RetentionOptions())
 	shard := newDatabaseShard(testNs.metadata, 0, nil, nil,
-		&testIncreasingIndex{}, commitLogWriteNoOp, databaseIndexNoOp.Write,
+		&testIncreasingIndex{}, commitLogWriteNoOp, databaseIndexNoOpWriteFn,
 		false, opts, seriesOpts).(*dbShard)
 	defer shard.Close()
 
