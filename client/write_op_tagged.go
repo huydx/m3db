@@ -45,6 +45,10 @@ type writeOpTagged struct {
 func (w *writeOpTagged) reset() {
 	*w = writeOpTaggedZeroed
 	w.request.Datapoint = &w.datapoint
+	// TODO(prateek): need to test if this works; further if we can actually
+	// use the pooled parts of the arrays
+	w.request.TagNames = w.request.TagNames[:0]
+	w.request.TagValues = w.request.TagValues[:0]
 }
 
 func (w *writeOpTagged) Close() {
