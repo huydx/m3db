@@ -23,9 +23,8 @@ package storage
 import (
 	"testing"
 
-	"github.com/m3db/m3ninx/index/segment"
-
 	"github.com/m3db/m3db/storage/index"
+	"github.com/m3db/m3ninx/index/segment"
 	"github.com/m3db/m3x/context"
 	"github.com/m3db/m3x/ident"
 
