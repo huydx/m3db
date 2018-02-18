@@ -85,8 +85,11 @@ func (i *idsIter) release() {
 	}
 	if i.currentTags != nil {
 		// TODO(prateek): add ident.Pool method for - PutTags(Tags)
-		for _, t := range i.currentTags {
-			i.idPool.PutTag(t)
+		for j := range i.currentTags {
+			tag := i.currentTags[j]
+			i.idPool.PutTag(tag)
+			i.currentTags[j].Name = nil
+			i.currentTags[j].Value = nil
 		}
 		i.currentTags = i.currentTags[:0]
 	}
