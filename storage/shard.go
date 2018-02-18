@@ -956,6 +956,15 @@ func (s *dbShard) insertSeriesBatch(inserts []dbShardInsert) error {
 
 	s.Lock()
 	for i := range inserts {
+		entry, _, err := s.lookupEntryWithLock(inserts[i].entry.series.ID())
+		if entry != nil {
+			// Already exists so update the entry we're pointed at for this insert
+			inserts[i].entry = entry
+
+			// Entry already exists, don't need to re-index.
+			inserts[i].opts.indexWriteFn = nil
+		}
+
 		// If we are going to write to this entry then increment the
 		// writer count so it does not look empty immediately after
 		// we release the write lock
@@ -964,11 +973,6 @@ func (s *dbShard) insertSeriesBatch(inserts []dbShardInsert) error {
 		hasPendingRetrievedBlock := inserts[i].opts.hasPendingRetrievedBlock
 		anyPendingAction = anyPendingAction || hasPendingWrite || hasPendingRetrievedBlock
 
-		entry, _, err := s.lookupEntryWithLock(inserts[i].entry.series.ID())
-		if entry != nil {
-			// Already exists so update the entry we're pointed at for this insert
-			inserts[i].entry = entry
-		}
 		if hasPendingWrite || hasPendingRetrievedBlock {
 			// We're definitely writing a value, ensure that the pending write is
 			// visible before we release the lookup write lock

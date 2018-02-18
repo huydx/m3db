@@ -963,6 +963,11 @@ func TestShardInsertDatabaseIndex(t *testing.T) {
 			time.Now(), 1.0, xtime.Second, nil))
 
 	require.NoError(t,
+		shard.WriteTagged(ctx, ident.StringID("foo"),
+			ident.NewTagIterator(ident.StringTag("name", "value")),
+			time.Now(), 2.0, xtime.Second, nil))
+
+	require.NoError(t,
 		shard.Write(ctx, ident.StringID("baz"), time.Now(), 1.0, xtime.Second, nil))
 
 	lock.Lock()
@@ -1012,6 +1017,11 @@ func TestShardAsyncInsertDatabaseIndex(t *testing.T) {
 			time.Now(), 1.0, xtime.Second, nil))
 
 	require.NoError(t,
+		shard.WriteTagged(ctx, ident.StringID("foo"),
+			ident.NewTagIterator(ident.StringTag("name", "value")),
+			time.Now(), 2.0, xtime.Second, nil))
+
+	require.NoError(t,
 		shard.Write(ctx, ident.StringID("bar"), time.Now(), 1.0, xtime.Second, nil))
 
 	require.NoError(t,
@@ -1024,7 +1034,7 @@ func TestShardAsyncInsertDatabaseIndex(t *testing.T) {
 
 	for {
 		counter, ok := testReporter.Counters()["dbshard.insert-queue.inserts"]
-		if ok && counter == 3 {
+		if ok && counter == 4 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
