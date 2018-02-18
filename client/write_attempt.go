@@ -32,7 +32,7 @@ import (
 
 type writeAttemptType int
 
-// nolint: deadcode
+// nolint
 const (
 	unknownWriteAttemptType writeAttemptType = iota
 	untaggedWriteAttemptType
